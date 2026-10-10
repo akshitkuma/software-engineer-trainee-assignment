@@ -189,14 +189,16 @@ def compute_work_hours(punch_in: datetime, punch_out: datetime) -> float:
 
 
 
+
 def compute_overtime(
     punch_out: datetime, shift_end: str, date_str: str
 ) -> int:
-    """Calculate overtime after the shift end, with a 30-minute threshold."""
+    """Calculate overtime after shift end, applying a 30-minute threshold."""
     h, m = map(int, shift_end.split(":"))
     shift_date = date.fromisoformat(date_str)
 
-    end = datetime(
+    # punch_out is expected to be in the same timezone as the shift.
+    scheduled_end = datetime(
         shift_date.year,
         shift_date.month,
         shift_date.day,
@@ -205,21 +207,14 @@ def compute_overtime(
         tzinfo=punch_out.tzinfo,
     )
 
-    # Overnight shift: scheduled end falls on the next day.
-    if end <= punch_out and (h, m) <= (
-        int("23"), int("59")
-    ):
-        if h < 12 and punch_out.date() > shift_date:
-            end += timedelta(days=1)
+    # If punch-out is on the next day and the scheduled end
+    # is an early-morning time, use the next day's shift end.
+    if punch_out.date() > shift_date and h < 12:
+        scheduled_end += timedelta(days=1)
 
-    # If the scheduled end is still more than 12 hours
-    # after punch-out, it belongs to the previous day.
-    if end - punch_out > timedelta(hours=12):
-        end -= timedelta(days=1)
+    elapsed_seconds = (punch_out - scheduled_end).total_seconds()
 
-    elapsed_seconds = (punch_out - end).total_seconds()
-
-    # Overtime starts at 30 minutes after shift end.
+    # Overtime is counted only after at least 30 full minutes.
     if elapsed_seconds < 30 * 60:
         return 0
 
@@ -1092,7 +1087,7 @@ def department_attendance_trend(
                     "date": {"$gte": date_from, "$lte": date_to}
                 }},
                 {"$project": {
-                    "date": 1, "status": 1, "late_minutes": 1, "_id": 0
+                    "date": 1, "status": 1, "late_minutes": 1,"half_day": 1,"_id": 0
                 }}
             ],
             "as": "logs"
@@ -1101,11 +1096,25 @@ def department_attendance_trend(
         {"$group": {
             "_id": "$logs.date",
             "present_count": {
-                "$sum": {"$cond": [
-                    {"$in": ["$logs.status", ["PRESENT", "WFH", "ON_DUTY"]]},
-                    1, 0
-                ]}
+    "$sum": {
+        "$cond": [
+            {
+                "$in": [
+                    "$logs.status",
+                    ["PRESENT", "WFH", "ON_DUTY"]
+                ]
             },
+            {
+                "$cond": [
+                    {"$eq": ["$logs.half_day", True]},
+                    0.5,
+                    1
+                ]
+            },
+            0
+        ]
+    }
+},
             "late_count": {
                 "$sum": {"$cond": [{"$gt": ["$logs.late_minutes", 0]}, 1, 0]}
             }

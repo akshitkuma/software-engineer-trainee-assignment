@@ -44,3 +44,11 @@ def test_overnight_shift_late_minutes():
         "%Y-%m-%d %H:%M:%S",
     )
     assert compute_late_minutes(punch, "22:00") == 0
+
+def test_overnight_shift_overtime():
+    # Shift: 22:00 to 06:00, attendance date 2026-10-12.
+    # Punch-out at 06:30 next day should count 30 overtime minutes.
+    punch = datetime.strptime(
+        "2026-10-13 06:30:00", "%Y-%m-%d %H:%M:%S"
+    )
+    assert compute_overtime(punch, "06:00", "2026-10-12") == 30
