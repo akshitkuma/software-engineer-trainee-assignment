@@ -155,30 +155,37 @@ def create_indexes():
 
 
 
-def compute_late_minutes(punch_in: datetime, shift_start: str) -> int:
-    h, m = map(int, shift_start.split(":"))
+def compute_late_minutes(
+    punch_in: datetime,
+    shift_start: str,
+    shift_end: str | None = None,
+) -> int:
+    start_h, start_m = map(int, shift_start.split(":"))
 
     start = punch_in.replace(
-        hour=h,
-        minute=m,
+        hour=start_h,
+        minute=start_m,
         second=0,
-        microsecond=0
+        microsecond=0,
     )
 
-    # Handle overnight shift: an early-morning punch-in
-    # may belong to the previous day's shift start.
-    if start > punch_in:
-        start -= timedelta(days=1)
+    # Only infer a previous-day shift when shift_end is available.
+    if shift_end is not None:
+        end_h, end_m = map(int, shift_end.split(":"))
+        overnight = (end_h, end_m) <= (start_h, start_m)
 
-    elapsed_minutes = int(
-        (punch_in - start).total_seconds() // 60
-    )
+        if overnight and punch_in.time() < start.time():
+            start -= timedelta(days=1)
 
-    # Assignment rule: late only when strictly more than 10 minutes.
     elapsed_seconds = (punch_in - start).total_seconds()
+
     if elapsed_seconds <= 10 * 60:
-       return 0
+        return 0
+
     return int(elapsed_seconds // 60)
+
+
+
 
 def compute_work_hours(punch_in: datetime, punch_out: datetime) -> float:
     """Calculate work hours rounded to two decimals using half-up rounding."""
@@ -406,6 +413,7 @@ def punch_in(body: PunchInIn):
     late_minutes = compute_late_minutes(
         ist_ts.replace(tzinfo=None),
         emp["shift_start"],
+        emp["shift_end"],
     )
 
     doc = {
