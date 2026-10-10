@@ -1,9 +1,35 @@
-# REVIEW.md
+# Code Review: Starter `app/main.py`
 
-List every defect you found in the starter `app/main.py` (helpers and endpoints). For each one:
+## Defects Found
 
 | # | Where (function / line) | What is wrong | How you'd notice it (test, input, or symptom) | How you fixed it |
 |---|---|---|---|---|
-| 1 | | | | |
+| 1 | `health()` | The starter returns `{"status": "ok"}` without checking whether MongoDB is reachable. | Stop or disconnect MongoDB and call `GET /health`. The starter still reports success. | Added a MongoDB `ping` command and return HTTP 503 when the database is unavailable. |
+| 2 | `create_indexes()` | Only the unique employee-code and attendance natural-key indexes are created. Query-specific indexes needed for filtering, sorting and analytics are missing. | Inspect MongoDB indexes and run explain plans on attendance and analytics queries. | Added indexes for attendance date sorting/filtering and employee department/joining-date queries. Verify the final index list to avoid redundant indexes. |
+| 3 | `compute_late_minutes()` | The starter does not correctly handle shifts that cross midnight when determining the scheduled start relative to the punch-in time. | Test a punch-in just after an overnight shift starts and compare it with the 10-minute grace-period rules. | Updated the calculation to handle the scheduled start relative to the punch-in time and apply the strict 10-minute grace-period rule. |
+| 4 | `compute_overtime()` | The starter does not consistently enforce the required 30-minute overtime threshold and needs correct scheduled shift-end handling for overnight shifts. | For a shift ending at 18:30, test punch-outs at 18:59 and 19:00. Also test an overnight shift. | Added threshold handling and shift-end date logic. Overnight and boundary cases still need comprehensive verification. |
+| 5 | `punch_out()` | The starter searches only for records whose `punch_out` is `None`. A repeated punch-out can therefore return 404 instead of the required 409, and selecting only open records can miss a more recent already-closed record. | Punch out twice for the same employee, or create multiple records and test which record is selected. | Added duplicate-punch-out conflict handling and an atomic conditional update. The record-selection logic should also be tested with multiple records, including a newer closed record. |
+| 6 | `list_attendance()` | The starter loads all matching documents into application memory, sorts them in Python, and paginates afterward. It also sorts only by date rather than using the required employee-code tie-breaker. | Seed a large collection, inspect query execution, and create multiple records with the same date. | Moved sorting, skipping and limiting into MongoDB; added total counting after filters and deterministic sorting by date descending and employee code ascending. |
+| 7 | `list_attendance()` | The starter does not adequately validate date ranges, allowed status values, or pagination bounds. | Try `page=0`, `page_size=101`, invalid dates, reversed date ranges, and an invalid status. | Added pagination constraints, date-format/range validation and status validation. |
+| 8 | Attendance API implementation | The starter does not implement the complete attendance regularization workflow, including recomputing derived values and preserving an audit trail. | PATCH a record with changed status or punch times, submit a no-op update, and inspect the history array. | Added a PATCH endpoint that records manual changes in history and uses a conditional update to detect concurrent modifications. Status/punch combinations and all derived-field edge cases still require full contract testing. |
+| 9 | Analytics endpoints | The starter leaves the required employee monthly summary, department summary, late leaderboard and department trend endpoints unimplemented. | Call the analytics routes described in `openapi.yaml`; missing routes return 404. | Implemented the four analytics routes. Aggregation, rounding, half-day handling, zero-log employees and date-boundary cases need verification against the contract. |
+| 10 | Department trend implementation | Daily gap filling, working-day calculations, headcount changes and the seven-day moving average must follow the contract exactly; Python-side date loops do not satisfy the aggregation requirement. | Request a range containing weekends and days with no attendance records; test employees joining during the range and half-day attendance. | Implemented a trend endpoint, but its aggregation-based gap filling and half-day calculations need further correction and verification before claiming full compliance. |
+| 11 | `/admin/explain/{endpoint}` | The starter does not provide the required explain endpoint for the main query or aggregation used by each supported endpoint. | Request an explain plan for each supported endpoint and compare it with the query the endpoint actually executes. | Added an explain endpoint and BSON-to-JSON conversion. The plans for analytics must be verified to ensure they explain the actual aggregation and use indexes without collection scans. |
+| 12 | Employee and request validation | The starter request models do not enforce every contract constraint, including strict epoch-millisecond inputs, employee-code format and valid shift times. | Submit seconds instead of milliseconds, floating-point timestamps, malformed employee codes and invalid shift times. | Added stricter timestamp validation and request validation where implemented. Verify employee-code format, date formats and shift-time constraints against `openapi.yaml`. |
 
-Also note anything you looked at and decided was **not** a defect, and why.
+## Reviewed but Not Considered Defects
+
+| Area | Why it was not considered a defect |
+|---|---|
+| `to_utc_datetime()` | Converting epoch milliseconds to UTC and truncating microseconds is consistent with the contract's whole-second timestamp convention. |
+| `get_attendance_date()` | The approach of converting the instant to IST before deriving the attendance date is appropriate. The overnight boundary still needs explicit tests. |
+| `compute_work_hours()` | Using `Decimal` with `ROUND_HALF_UP` is appropriate for the required two-decimal work-hours rounding. |
+| Unique attendance index | A unique compound index on `(emp_code, date)` is appropriate because an employee must have at most one attendance record per attendance date. |
+| Unique employee index | A unique index on `emp_code` is appropriate because employee codes are unique business identifiers. |
+| Attendance status values | `PRESENT`, `WFH`, `ON_DUTY`, `ABSENT`, and `LEAVE` are intentional contract-defined values, not arbitrary application states. |
+
+## Review Summary
+
+The starter implementation covered parts of the happy path but did not fully satisfy the API contract. The review focused on input validation, attendance calculations, correct HTTP status codes, database-side pagination and aggregation, audit history, concurrency, indexing, and query-plan visibility.
+
+The implementation and tests should be validated against the complete `openapi.yaml` contract before the assignment is considered complete. Passing the existing tests alone does not establish full contract compliance.
